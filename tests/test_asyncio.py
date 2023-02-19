@@ -235,7 +235,6 @@ class HighLevelTest(TestCase):
         async with self.run_server(
             session_ticket_fetcher=store.pop, session_ticket_handler=store.add
         ) as server_port:
-
             # first request
             response = await self.run_client(
                 port=server_port, session_ticket_handler=save_ticket

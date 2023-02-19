@@ -1,4 +1,5 @@
 import binascii
+import ipaddress
 import logging
 import os
 from collections import deque
@@ -101,6 +102,7 @@ RETIRE_CONNECTION_ID_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 STOP_SENDING_FRAME_CAPACITY = 1 + 2 * UINT_VAR_MAX_SIZE
 STREAMS_BLOCKED_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE  # + reason length
+SERVER_MIGRATION_FRAME_CAPACITY = 1 + 4
 
 
 def EPOCHS(shortcut: str) -> FrozenSet[tls.Epoch]:
@@ -339,6 +341,11 @@ class QuicConnection:
         self._streams_finished: Set[int] = set()
         self._version: Optional[int] = None
         self._version_negotiation_count = 0
+        self._server_triggered_to_migrate = False
+        self._previous_server_address: Optional[QuicNetworkPath] = None
+        self._server_migration_address: Optional[QuicNetworkPath] = None
+        self._trigger_period = False
+        self._first_time_trigger = True
 
         if self._is_client:
             self._original_destination_connection_id = self._peer_cid.cid
@@ -414,6 +421,8 @@ class QuicConnection:
             0x1E: (self._handle_handshake_done_frame, EPOCHS("1")),
             0x30: (self._handle_datagram_frame, EPOCHS("01")),
             0x31: (self._handle_datagram_frame, EPOCHS("01")),
+            0x32: (self._handle_server_migration_frame, EPOCHS("01")),
+            0x33: (self._handle_trigger_frame, EPOCHS("01")),
         }
 
     @property
@@ -482,7 +491,9 @@ class QuicConnection:
         self._version = self._configuration.supported_versions[0]
         self._connect(now=now)
 
-    def datagrams_to_send(self, now: float) -> List[Tuple[bytes, NetworkAddress]]:
+    def datagrams_to_send(
+        self, now: float, counter: int = 0
+    ) -> List[Tuple[bytes, NetworkAddress]]:
         """
         Return a list of `(data, addr)` tuples of datagrams which need to be
         sent, and the network address to which they need to be sent.
@@ -552,7 +563,7 @@ class QuicConnection:
                 if not self._handshake_confirmed:
                     for epoch in [tls.Epoch.INITIAL, tls.Epoch.HANDSHAKE]:
                         self._write_handshake(builder, epoch, now)
-                self._write_application(builder, network_path, now)
+                self._write_application(builder, network_path, now, counter)
             except QuicPacketBuilderStop:
                 pass
 
@@ -601,7 +612,15 @@ class QuicConnection:
         for datagram in datagrams:
             payload_length = len(datagram)
             network_path.bytes_sent += payload_length
-            ret.append((datagram, network_path.addr))
+
+            if (
+                self._is_client
+                and self._loss._pto_count > 2
+                and self._server_migration_address is not None
+            ):
+                ret.append((datagram, self._server_migration_address.addr))
+            else:
+                ret.append((datagram, network_path.addr))
 
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
@@ -636,7 +655,11 @@ class QuicConnection:
         if self._state not in END_STATES:
             # ack timer
             for space in self._loss.spaces:
-                if space.ack_at is not None and space.ack_at < timer_at:
+                if (
+                    space.ack_at is not None
+                    and space.ack_at < timer_at
+                    and self._previous_server_address is None
+                ):
                     timer_at = space.ack_at
 
             # loss detection timer
@@ -1038,7 +1061,12 @@ class QuicConnection:
             if network_path not in self._network_paths:
                 self._network_paths.append(network_path)
             idx = self._network_paths.index(network_path)
-            if idx and not is_probing and packet_number > space.largest_received_packet:
+            if (
+                idx
+                and not is_probing
+                and packet_number > space.largest_received_packet
+                and not network_path == self._previous_server_address
+            ):
                 self._logger.debug("Network path %s promoted", network_path.addr)
                 self._network_paths.pop(idx)
                 self._network_paths.insert(0, network_path)
@@ -1922,6 +1950,12 @@ class QuicConnection:
                 frame_type=frame_type,
                 reason_phrase="Response does not match challenge",
             )
+        else:
+            if self._previous_server_address is None:
+                print("MIGRATION SUCCESSFULLY TERMINATED")
+                self._previous_server_address = None
+                self._server_migration_address = None
+
         self._logger.debug(
             "Network path %s validated by challenge", context.network_path.addr
         )
@@ -1936,6 +1970,56 @@ class QuicConnection:
         # log frame
         if self._quic_logger is not None:
             context.quic_logger_frames.append(self._quic_logger.encode_ping_frame())
+
+    def _handle_server_migration_frame(
+        self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle a SERVER MIGRATION frame.
+        """
+        self._logger.info("_handle_server_migration_frame")
+
+        # Retrieve and convert new ip address of the server
+        data = buf.pull_uint32()
+        ip = str(ipaddress.IPv4Address(data))
+
+        # log frame
+        if self._quic_logger is not None:
+            context.quic_logger_frames.append(
+                self._quic_logger.encode_server_migration_frame(data=bytes(data))
+            )
+
+        # Create QuicNetworkPath
+        string = "::ffff:" + ip
+        addr = (string, 4433, 0, 0)
+        network_path = QuicNetworkPath(addr)
+
+        # Adding network path
+        if network_path not in self._network_paths:
+            self._network_paths.append(network_path)
+
+        self._previous_server_address = context.network_path
+        self._server_migration_address = network_path
+
+        # log frame
+        if self._quic_logger is not None:
+            context.quic_logger_frames.append(
+                self._quic_logger.encode_server_migration_frame(bytes(data))
+            )
+
+    def _handle_trigger_frame(
+        self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle a TRIGGER frame.
+        """
+        self._logger.info("_handle_trigger_frame")
+
+        self._server_triggered_to_migrate = True
+
+        # log frame
+        if self._quic_logger is not None:
+            context.quic_logger_frames.append(self._quic_logger.encode_trigger_frame())
 
     def _handle_reset_stream_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -2248,6 +2332,24 @@ class QuicConnection:
                 self._events.append(events.PingAcknowledged(uid=uid))
         else:
             self._ping_pending.extend(uids)
+
+    def _on_server_migration_delivery(self, delivery: QuicDeliveryState) -> None:
+        """
+        Callback when a SERVER MIGRATION frame is acknowledged or lost.
+        """
+        self._logger.info("_on_server_migration_delivery")
+
+        if delivery != QuicDeliveryState.ACKED:
+            self._server_triggered_to_migrate = True
+
+    def _on_trigger_delivery(self, delivery: QuicDeliveryState) -> None:
+        """
+        Callback when a TRIGGER frame is acknowledged or lost.
+        """
+        self._logger.info("_on_trigger_delivery")
+
+        if delivery != QuicDeliveryState.ACKED:
+            self._trigger_period = True
 
     def _on_retire_connection_id_delivery(
         self, delivery: QuicDeliveryState, sequence_number: int
@@ -2611,7 +2713,11 @@ class QuicConnection:
             )
 
     def _write_application(
-        self, builder: QuicPacketBuilder, network_path: QuicNetworkPath, now: float
+        self,
+        builder: QuicPacketBuilder,
+        network_path: QuicNetworkPath,
+        now: float,
+        counter: int,
     ) -> None:
         crypto_stream: Optional[QuicStream] = None
         if self._cryptos[tls.Epoch.ONE_RTT].send.is_valid():
@@ -2693,6 +2799,21 @@ class QuicConnection:
 
                 # MAX_DATA and MAX_STREAMS
                 self._write_connection_limits(builder=builder, space=space)
+
+                # Condition for triggering
+                if counter == 2 and self._first_time_trigger:
+                    self._trigger_period = True
+                    self._first_time_trigger = False
+
+                # TRIGGER
+                if self._is_client and self._trigger_period:
+                    self._write_trigger_frame(builder=builder)
+
+                # SERVER MIGRATION
+                if not self._is_client and self._server_triggered_to_migrate:
+                    self._write_server_migration_frame(
+                        builder=builder
+                    )  # For test case ip address of server inside function
 
             # stream-level limits
             for stream in self._streams.values():
@@ -3048,6 +3169,52 @@ class QuicConnection:
         # log frame
         if self._quic_logger is not None:
             builder.quic_logger_frames.append(self._quic_logger.encode_ping_frame())
+
+    def _write_server_migration_frame(self, builder: QuicPacketBuilder):
+        self._logger.info("_write_server_migration_frame")
+
+        ip = "172.16.4.232"  # 192.168.178.55
+        ip_int = int(ipaddress.IPv4Address(ip))
+
+        buf = builder.start_frame(
+            QuicFrameType.SERVER_MIGRATION,
+            capacity=SERVER_MIGRATION_FRAME_CAPACITY,
+            handler=self._on_server_migration_delivery,
+        )
+        buf.push_uint32(ip_int)
+
+        self._server_triggered_to_migrate = False
+
+        self._logger.debug(
+            "Sending SERVER MIGRATION in packet %d",
+            builder.packet_number,
+        )
+
+        # log frame
+        if self._quic_logger is not None:
+            builder.quic_logger_frames.append(
+                self._quic_logger.encode_server_migration_frame(data=bytes(ip_int))
+            )
+
+    def _write_trigger_frame(self, builder: QuicPacketBuilder):
+        self._logger.info("_write_trigger_frame")
+
+        builder.start_frame(
+            QuicFrameType.TRIGGER,
+            capacity=PING_FRAME_CAPACITY,  # Leave ping frame capacity because I don't need to send data
+            handler=self._on_trigger_delivery,
+        )
+
+        self._trigger_period = False
+
+        self._logger.debug(
+            "Sending TRIGGER in packet %d",
+            builder.packet_number,
+        )
+
+        # log frame
+        if self._quic_logger is not None:
+            builder.quic_logger_frames.append(self._quic_logger.encode_trigger_frame())
 
     def _write_reset_stream_frame(
         self,

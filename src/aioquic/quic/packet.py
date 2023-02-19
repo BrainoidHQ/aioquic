@@ -431,6 +431,8 @@ class QuicFrameType(IntEnum):
     HANDSHAKE_DONE = 0x1E
     DATAGRAM = 0x30
     DATAGRAM_WITH_LENGTH = 0x31
+    SERVER_MIGRATION = 0x32
+    TRIGGER = 0x33
 
 
 NON_ACK_ELICITING_FRAME_TYPES = frozenset(

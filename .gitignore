@@ -1,6 +1,8 @@
 *.egg-info
 *.pyc
 *.so
+*.bin
+coverage.xml
 .coverage
 .eggs
 .mypy_cache

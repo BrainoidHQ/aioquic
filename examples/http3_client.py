@@ -136,12 +136,14 @@ class HttpClient(QuicConnectionProtocol):
         else:
             self._http = H3Connection(self._quic)
 
-    async def get(self, url: str, headers: Optional[Dict] = None) -> Deque[H3Event]:
+    async def get(
+        self, url: str, counter: int, headers: Optional[Dict] = None
+    ) -> Deque[H3Event]:
         """
         Perform a GET request.
         """
         return await self._request(
-            HttpRequest(method="GET", url=URL(url), headers=headers)
+            HttpRequest(method="GET", url=URL(url), headers=headers), counter
         )
 
     async def post(
@@ -216,7 +218,7 @@ class HttpClient(QuicConnectionProtocol):
             for http_event in self._http.handle_event(event):
                 self.http_event_received(http_event)
 
-    async def _request(self, request: HttpRequest) -> Deque[H3Event]:
+    async def _request(self, request: HttpRequest, counter: int) -> Deque[H3Event]:
         stream_id = self._quic.get_next_available_stream_id()
         self._http.send_headers(
             stream_id=stream_id,
@@ -238,7 +240,7 @@ class HttpClient(QuicConnectionProtocol):
         waiter = self._loop.create_future()
         self._request_events[stream_id] = deque()
         self._request_waiter[stream_id] = waiter
-        self.transmit()
+        self.transmit(counter=counter)
 
         return await asyncio.shield(waiter)
 
@@ -249,6 +251,7 @@ async def perform_http_request(
     data: Optional[str],
     include: bool,
     output_dir: Optional[str],
+    counter: int,
 ) -> None:
     # perform request
     start = time.time()
@@ -264,7 +267,7 @@ async def perform_http_request(
         )
         method = "POST"
     else:
-        http_events = await client.get(url)
+        http_events = await client.get(url, counter)
         method = "GET"
     elapsed = time.time() - start
 
@@ -410,18 +413,22 @@ async def main(
 
             await ws.close()
         else:
-            # perform request
-            coros = [
-                perform_http_request(
-                    client=client,
-                    url=url,
-                    data=data,
-                    include=include,
-                    output_dir=output_dir,
-                )
-                for url in urls
-            ]
-            await asyncio.gather(*coros)
+            count = 0
+            while count < 5:
+                await asyncio.sleep(5)
+                coros = [
+                    perform_http_request(
+                        client=client,
+                        url=url,
+                        data=data,
+                        include=include,
+                        output_dir=output_dir,
+                        counter=count,
+                    )
+                    for url in urls
+                ]
+                await asyncio.gather(*coros)
+                count += 1
 
             # process http pushes
             process_http_pushes(client=client, include=include, output_dir=output_dir)

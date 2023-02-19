@@ -147,6 +147,12 @@ class QuicLoggerTrace:
     def encode_ping_frame(self) -> Dict:
         return {"frame_type": "ping"}
 
+    def encode_server_migration_frame(self, data: bytes) -> Dict:
+        return {"data": hexdump(data), "frame_type": "server_migration"}
+
+    def encode_trigger_frame(self) -> Dict:
+        return {"frame_type": "trigger"}
+
     def encode_reset_stream_frame(
         self, error_code: int, final_size: int, stream_id: int
     ) -> Dict:
