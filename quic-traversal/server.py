@@ -14,21 +14,26 @@ class EchoQuicProtocol(QuicConnectionProtocol):
         print("Received: ", event)
         if isinstance(event, StreamDataReceived):
             self._quic.send_stream_data(event.stream_id, b"Hole Punching", end_stream=True)
-            # run_quic_client(self)
             if event.end_stream:
                 self.close()
 
 async def run_quic_server():
     configuration = QuicConfiguration(is_client=False)
+    configuration.load_verify_locations("../tests/pycacert.pem")
     configuration.load_cert_chain("../tests/ssl_cert.pem", "../tests/ssl_key.pem")
-    await serve("localhost", 4433, configuration=configuration, create_protocol=EchoQuicProtocol)
+    await serve("localhost", 12346, configuration=configuration, create_protocol=EchoQuicProtocol)
+    await run_quic_client()
     await asyncio.Future()
 
-def run_quic_client(quic: QuicConnectionProtocol):
+async def run_quic_client():
+    print("Running client")
     configuration = QuicConfiguration(is_client=True)
     configuration.load_verify_locations("../tests/pycacert.pem")
-    quic._quic._is_client = True
-    quic._quic.connect(quic._quic._network_paths[0], time.time())
+    async with connect("localhost", 12345, configuration=configuration, create_protocol=EchoQuicProtocol, local_port=12346) as protocol:
+        stream_id = protocol._quic.get_next_available_stream_id()
+        protocol._quic.send_stream_data(stream_id, b"Hello!", end_stream=False)
+        received_data = await protocol.received_data.get()
+        print("Data Received:", received_data)
 
 if __name__ == "__main__":
     try:
