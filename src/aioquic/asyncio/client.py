@@ -69,13 +69,13 @@ async def connect(
     # explicitly enable IPv4/IPv6 dual stack
     sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
     completed = False
-    try:
-        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-        sock.bind((local_host, local_port, 0, 0))
-        completed = True
-    finally:
-        if not completed:
-            sock.close()
+    # try:
+    #     sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    #     sock.bind((local_host, local_port, 0, 0))
+    #     completed = True
+    # finally:
+    #     if not completed:
+    #         sock.close()
     # connect
     transport, protocol = await loop.create_datagram_endpoint(
         lambda: create_protocol(connection, stream_handler=stream_handler),

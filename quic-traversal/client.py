@@ -20,7 +20,7 @@ async def run_quic_client():
     configuration = QuicConfiguration(is_client=True)
     configuration.load_verify_locations("../tests/pycacert.pem")
 
-    async with connect("localhost", 12346, configuration=configuration, create_protocol=EchoClientProtocol, local_port=12345) as protocol:
+    async with connect("35.232.66.96", 12346, configuration=configuration, create_protocol=EchoClientProtocol, local_port=12345) as protocol:
         stream_id = protocol._quic.get_next_available_stream_id()
         protocol._quic.send_stream_data(stream_id, b"Hello!", end_stream=False)
         received_data = await protocol.received_data.get()
