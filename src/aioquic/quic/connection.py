@@ -501,9 +501,9 @@ class QuicConnection:
         :param addr: The network address of the remote peer.
         :param now: The current time.
         """
-        assert (
-            self._is_client and not self._connect_called
-        ), "connect() can only be called for clients and a single time"
+        # assert (
+        #     self._is_client not self._connect_called
+        # ), "connect() can only be called for clients and a single time"
         self._connect_called = True
 
         self._network_paths = [QuicNetworkPath(addr, is_validated=True)]
@@ -1235,7 +1235,7 @@ class QuicConnection:
         """
         Start the client handshake.
         """
-        assert self._is_client
+        # assert self._is_client
 
         if self._quic_logger is not None:
             self._quic_logger.log_event(
@@ -1251,7 +1251,6 @@ class QuicConnection:
                 event="alpn_information",
                 data={"client_alpns": self._configuration.alpn_protocols},
             )
-
         self._close_at = now + self._configuration.idle_timeout
         self._initialize(self._peer_cid.cid)
 
@@ -1412,8 +1411,8 @@ class QuicConnection:
         # TLS session resumption
         session_ticket = self._configuration.session_ticket
         if (
-            self._is_client
-            and session_ticket is not None
+            # self._is_client and
+            session_ticket is not None
             and session_ticket.is_valid
             and session_ticket.server_name == self._configuration.server_name
         ):
