@@ -13,7 +13,6 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         self, quic: QuicConnection, stream_handler: Optional[QuicStreamHandler] = None
     ):
         loop = asyncio.get_event_loop()
-
         self._closed = asyncio.Event()
         self._connected = False
         self._connected_waiter: Optional[asyncio.Future[None]] = None
@@ -97,10 +96,9 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         Send pending datagrams to the peer and arm the timer if needed.
         """
         self._transmit_task = None
-
         # send datagrams
         for data, addr in self._quic.datagrams_to_send(now=self._loop.time()):
-            print("Sending to", addr)
+            print("Sending to", addr, self.transmit_count)
             self._transport.sendto(data, addr)
 
         # re-arm timer

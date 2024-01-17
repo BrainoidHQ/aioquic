@@ -1,5 +1,6 @@
 import asyncio
 import os
+import socket
 from functools import partial
 from typing import Callable, Dict, Optional, Text, Union, cast
 
@@ -173,6 +174,7 @@ async def serve(
     session_ticket_handler: Optional[SessionTicketHandler] = None,
     retry: bool = False,
     stream_handler: QuicStreamHandler = None,
+    sock = None
 ) -> QuicServer:
     """
     Start a QUIC server at the given `host` and `port`.
@@ -198,9 +200,8 @@ async def serve(
       created. It must accept two arguments: a :class:`asyncio.StreamReader`
       and a :class:`asyncio.StreamWriter`.
     """
-
+    print("Serving")
     loop = asyncio.get_event_loop()
-
     _, protocol = await loop.create_datagram_endpoint(
         lambda: QuicServer(
             configuration=configuration,
@@ -210,6 +211,8 @@ async def serve(
             retry=retry,
             stream_handler=stream_handler,
         ),
-        local_addr=(host, port),
+        # local_addr=(host, port),
+        sock=sock,
+        # family=socket.AF_INET,
     )
     return protocol

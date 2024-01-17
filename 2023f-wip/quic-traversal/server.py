@@ -1,6 +1,5 @@
 import asyncio
-import os
-import time
+import m_socket
 from aioquic.asyncio import serve, connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
@@ -19,17 +18,19 @@ class EchoQuicProtocol(QuicConnectionProtocol):
 
 async def run_quic_server():
     configuration = QuicConfiguration(is_client=False)
-    configuration.load_verify_locations("../tests/pycacert.pem")
-    configuration.load_cert_chain("../tests/ssl_cert.pem", "../tests/ssl_key.pem")
-    await serve("localhost", 12346, configuration=configuration, create_protocol=EchoQuicProtocol)
-    await run_quic_client()
+    configuration.load_verify_locations("../../tests/pycacert.pem")
+    configuration.load_cert_chain("../../tests/ssl_cert.pem", "../../tests/ssl_key.pem")
+    sock = m_socket.create_socket("localhost", 12346)
+
+    await serve("localhost", 12346, configuration=configuration, create_protocol=EchoQuicProtocol, sock=sock)
+    await run_quic_client(sock=sock)
     await asyncio.Future()
 
-async def run_quic_client():
+async def run_quic_client(sock):
     print("Running client")
     configuration = QuicConfiguration(is_client=True)
-    configuration.load_verify_locations("../tests/pycacert.pem")
-    async with connect("localhost", 12345, configuration=configuration, create_protocol=EchoQuicProtocol, local_port=12346) as protocol:
+    configuration.load_verify_locations("../../tests/pycacert.pem")
+    async with connect("localhost", 12345, configuration=configuration, create_protocol=EchoQuicProtocol, local_port=12346, sock=sock) as protocol:
         stream_id = protocol._quic.get_next_available_stream_id()
         protocol._quic.send_stream_data(stream_id, b"Hello!", end_stream=False)
         received_data = await protocol.received_data.get()

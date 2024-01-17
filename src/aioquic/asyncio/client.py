@@ -23,6 +23,7 @@ async def connect(
     token_handler: Optional[QuicTokenHandler] = None,
     wait_connected: bool = True,
     local_port: int = 0,
+    sock = None
 ) -> AsyncGenerator[QuicConnectionProtocol, None]:
     """
     Connect to a QUIC server at the given `host` and `port`.
@@ -47,13 +48,15 @@ async def connect(
     * ``local_port`` is the UDP port number that this client wants to bind.
     """
     loop = asyncio.get_event_loop()
-    local_host = "::"
+    local_host = "localhost"
 
     # lookup remote address
-    infos = await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
+    infos = await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM, family=socket.AF_INET)
     addr = infos[0][4]
-    if len(addr) == 2:
-        addr = ("::ffff:" + addr[0], addr[1], 0, 0)
+    print("addr:", addr)
+    if len(addr) == 4:
+        # addr = ("::ffff:" + addr[0], addr[1], 0, 0)
+        addr = (addr[0], addr[1])
 
     # prepare QUIC connection
     if configuration is None:
@@ -66,9 +69,9 @@ async def connect(
         token_handler=token_handler,
     )
 
-    # explicitly enable IPv4/IPv6 dual stack
-    sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-    completed = False
+    # # explicitly enable IPv4/IPv6 dual stack
+    # sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    # completed = False
     # try:
     #     sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
     #     sock.bind((local_host, local_port, 0, 0))
@@ -84,6 +87,7 @@ async def connect(
     protocol = cast(QuicConnectionProtocol, protocol)
     try:
         protocol.connect(addr)
+        await protocol.ping()
         if wait_connected:
             await protocol.wait_connected()
         yield protocol
